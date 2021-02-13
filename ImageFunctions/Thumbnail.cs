@@ -24,16 +24,22 @@ using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Options;
 
 namespace ImageFunctions
 {
-    public static class Thumbnail
+    public class Thumbnail
     {
-        private static readonly string BLOB_STORAGE_CONNECTION_STRING = Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+        private readonly BlobStorageConfig _config;
 
-        private static string GetBlobNameFromUrl(string bloblUrl)
+        public Thumbnail(IOptions<BlobStorageConfig> config)
         {
-            var uri = new Uri(bloblUrl);
+            _config = config.Value;
+        }
+
+        private static string GetBlobNameFromUrl(string blobUrl)
+        {
+            var uri = new Uri(blobUrl);
             var blobClient = new BlobClient(uri);
             return blobClient.Name;
         }
@@ -71,8 +77,8 @@ namespace ImageFunctions
         }
 
         [FunctionName("Thumbnail")]
-        public static async Task Run(
-            [EventGridTrigger]EventGridEvent eventGridEvent,
+        public async Task Run(
+            [EventGridTrigger] EventGridEvent eventGridEvent,
             [Blob("{data.url}", FileAccess.Read)] Stream input,
             ILogger log)
         {
@@ -80,23 +86,25 @@ namespace ImageFunctions
             {
                 if (input != null)
                 {
-                    var createdEvent = ((JObject)eventGridEvent.Data).ToObject<StorageBlobCreatedEventData>();
-                    var extension = Path.GetExtension(createdEvent.Url);
+                    var createdEvent = ((JObject) eventGridEvent.Data).ToObject<StorageBlobCreatedEventData>();
+                    var createdEventUrl = createdEvent.Url;
+                    var extension = Path.GetExtension(createdEventUrl);
                     var encoder = GetEncoder(extension);
 
                     if (encoder != null)
                     {
-                        var thumbnailWidth = Convert.ToInt32(Environment.GetEnvironmentVariable("THUMBNAIL_WIDTH"));
-                        var thumbContainerName = Environment.GetEnvironmentVariable("THUMBNAIL_CONTAINER_NAME");
-                        var blobServiceClient = new BlobServiceClient(BLOB_STORAGE_CONNECTION_STRING);
+                        var thumbnailWidth = Convert.ToInt32(_config.ThumbnailWidth);
+                        var thumbContainerName = _config.ThumbnailContainer;
+                        var blobServiceClient = new BlobServiceClient(_config.BlobStorageConnectionString);
                         var blobContainerClient = blobServiceClient.GetBlobContainerClient(thumbContainerName);
-                        var blobName = GetBlobNameFromUrl(createdEvent.Url);
+                        var blobName = GetBlobNameFromUrl(createdEventUrl);
 
                         using (var output = new MemoryStream())
                         using (Image<Rgba32> image = Image.Load(input))
                         {
                             var divisor = image.Width / thumbnailWidth;
-                            var height = Convert.ToInt32(Math.Round((decimal)(image.Height / divisor)));
+                            var imageHeight = (image.Height / divisor);
+                            var height = Convert.ToInt32(Math.Round((decimal)imageHeight));
 
                             image.Mutate(x => x.Resize(thumbnailWidth, height));
                             image.Save(output, encoder);
@@ -106,7 +114,7 @@ namespace ImageFunctions
                     }
                     else
                     {
-                        log.LogInformation($"No encoder support for: {createdEvent.Url}");
+                        log.LogInformation("No encoder support for: {CreatedEventUrl}", createdEventUrl);
                     }
                 }
             }
